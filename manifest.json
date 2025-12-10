@@ -16,13 +16,7 @@
     "activeTab"
   ],
   "host_permissions": [
-    "*://*.vinted.fr/*",
-    "*://*.vinted.com/*",
-    "*://*.leboncoin.fr/*",
-    "*://*.ebay.fr/*",
-    "*://*.ebay.com/*",
-    "https://www.vinted.fr/*",
-    "https://www.ebay.fr/*"
+    "*://*/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",

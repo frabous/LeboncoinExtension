@@ -1,6 +1,7 @@
 /**
- * ResellScout - Service Worker v5.0
+ * ResellScout - Service Worker v6.0
  * 100% Prix Réels - Sources: Vinted, LeBonCoin et eBay
+ * Architecture: Requêtes cross-origin depuis le service worker
  */
 
 // ============================================
@@ -8,13 +9,13 @@
 // ============================================
 
 const CONFIG = {
-  REQUEST_DELAY: 500,
-  TIMEOUT: 15000,
-  MAX_RESULTS: 30
+  REQUEST_DELAY: 300,
+  TIMEOUT: 12000,
+  MAX_RESULTS: 25
 };
 
 // ============================================
-// RECHERCHE PRIX - VINTED (Scraping HTML)
+// RECHERCHE PRIX - VINTED (via API mobile)
 // ============================================
 
 async function searchVintedPrices(query, options = {}) {
@@ -33,8 +34,8 @@ async function searchVintedPrices(query, options = {}) {
     const cleanQuery = query.replace(/[^\w\s\-àâäéèêëïîôùûüç]/gi, ' ').trim();
     console.log('[ResellScout] Recherche Vinted:', cleanQuery);
 
-    // Utiliser la page de recherche HTML de Vinted
-    const searchUrl = `https://www.vinted.fr/catalog?search_text=${encodeURIComponent(cleanQuery)}&order=relevance`;
+    // Utiliser l'API web de Vinted
+    const searchUrl = `https://www.vinted.fr/api/v2/catalog/items?page=1&per_page=${CONFIG.MAX_RESULTS}&search_text=${encodeURIComponent(cleanQuery)}&catalog_ids=&order=relevance&status_ids=&brand_ids=`;
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
@@ -42,89 +43,41 @@ async function searchVintedPrices(query, options = {}) {
     const response = await fetch(searchUrl, {
       method: 'GET',
       headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'fr',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       },
-      credentials: 'include',
+      mode: 'cors',
       signal: controller.signal
     });
 
     clearTimeout(timeoutId);
+    console.log('[ResellScout] Vinted response status:', response.status);
 
     if (!response.ok) {
-      throw new Error(`Vinted HTTP ${response.status}`);
+      // Si l'API échoue, essayer de scraper la page HTML
+      return await scrapeVintedHTML(cleanQuery);
     }
 
-    const html = await response.text();
-    console.log('[ResellScout] Vinted HTML reçu, longueur:', html.length);
-
-    // Extraire les données JSON intégrées dans la page
-    // Vinted intègre les données dans un script __NEXT_DATA__ ou similaire
-    let items = [];
-
-    // Méthode 1: Chercher les données JSON dans la page
-    const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
-    if (scriptMatch) {
-      try {
-        const jsonData = JSON.parse(scriptMatch[1]);
-        const catalogItems = jsonData?.props?.pageProps?.items || 
-                            jsonData?.props?.pageProps?.catalog?.items ||
-                            jsonData?.props?.pageProps?.initialData?.items || [];
-        items = catalogItems;
-        console.log('[ResellScout] Vinted données JSON trouvées:', items.length);
-      } catch (e) {
-        console.log('[ResellScout] Erreur parsing JSON Vinted:', e.message);
-      }
-    }
-
-    // Méthode 2: Si pas de JSON, parser le HTML directement
-    if (items.length === 0) {
-      // Regex pour extraire les prix et titres des cartes produit
-      const priceRegex = /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d,]+)\s*€<\/span>/gi;
-      const itemRegex = /data-testid="[^"]*item[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-      
-      // Alternative: chercher les données dans les attributs data-*
-      const dataMatches = html.matchAll(/"price"\s*:\s*"?([\d.]+)"?[^}]*"title"\s*:\s*"([^"]+)"/gi);
-      for (const match of dataMatches) {
-        items.push({
-          price: parseFloat(match[1]),
-          title: match[2]
-        });
-      }
-
-      // Autre pattern: chercher les cartes avec prix
-      const cardMatches = html.matchAll(/([\d]+[,.]?\d*)\s*€[^<]*<[^>]*>[^<]*<a[^>]*href="\/items\/(\d+)[^"]*"[^>]*>([^<]+)/gi);
-      for (const match of cardMatches) {
-        const price = parseFloat(match[1].replace(',', '.'));
-        if (price > 0 && !items.find(i => i.price === price)) {
-          items.push({
-            price: price,
-            title: match[3]?.trim() || 'Article Vinted',
-            id: match[2]
-          });
-        }
-      }
-    }
-
-    // Traitement des résultats
+    const data = await response.json();
+    console.log('[ResellScout] Vinted data:', data);
+    
+    const items = data.items || [];
+    
     if (items.length > 0) {
       results.prices = items
-        .slice(0, CONFIG.MAX_RESULTS)
-        .map(item => {
-          const price = typeof item.price === 'string' 
-            ? parseFloat(item.price.replace(',', '.').replace(/[^\d.]/g, '')) 
-            : parseFloat(item.price || item.total_item_price || 0);
-          return {
-            price: price,
-            title: item.title || 'Article Vinted',
-            url: item.url || (item.id ? `https://www.vinted.fr/items/${item.id}` : 'https://www.vinted.fr'),
-            condition: item.status,
-            brand: item.brand_title || item.brand,
-            image: item.photo?.url || item.photos?.[0]?.url || item.thumbnail || null
-          };
+        .filter(item => {
+          const price = parseFloat(item.price || item.total_item_price || 0);
+          return price > 0;
         })
-        .filter(item => item.price > 0);
+        .map(item => ({
+          price: parseFloat(item.price || item.total_item_price),
+          title: item.title || 'Article Vinted',
+          url: item.url || `https://www.vinted.fr/items/${item.id}`,
+          condition: item.status,
+          brand: item.brand_title,
+          image: item.photo?.url || item.photos?.[0]?.url || null
+        }));
 
       if (results.prices.length > 0) {
         const priceValues = results.prices.map(p => p.price);
@@ -138,12 +91,123 @@ async function searchVintedPrices(query, options = {}) {
     }
 
     if (!results.success) {
-      results.error = 'Aucun résultat trouvé';
+      // Fallback: scraper HTML
+      return await scrapeVintedHTML(cleanQuery);
+    }
+
+  } catch (error) {
+    console.warn('[ResellScout] Erreur Vinted API:', error.message);
+    // Fallback: scraper HTML
+    try {
+      return await scrapeVintedHTML(query);
+    } catch (e) {
+      results.error = error.message;
+    }
+  }
+
+  return results;
+}
+
+// Fallback: Scraper HTML Vinted
+async function scrapeVintedHTML(query) {
+  const results = {
+    source: 'Vinted',
+    prices: [],
+    avgPrice: null,
+    minPrice: null,
+    maxPrice: null,
+    count: 0,
+    success: false,
+    error: null
+  };
+
+  try {
+    const cleanQuery = encodeURIComponent(query.trim());
+    const searchUrl = `https://www.vinted.fr/catalog?search_text=${cleanQuery}`;
+    
+    console.log('[ResellScout] Scraping Vinted HTML:', searchUrl);
+
+    const response = await fetch(searchUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'fr-FR,fr;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    console.log('[ResellScout] Vinted HTML reçu, taille:', html.length);
+
+    // Chercher les données JSON dans le HTML
+    // Vinted stocke les données dans un script avec les props
+    const patterns = [
+      /"items"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
+      /window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});/,
+      /<script[^>]*>[\s\S]*?"catalogItems"[\s\S]*?(\[[\s\S]*?\])[\s\S]*?<\/script>/
+    ];
+
+    let items = [];
+
+    // Pattern 1: Chercher des prix dans le HTML
+    const priceMatches = html.matchAll(/(\d+(?:[,\.]\d{2})?)\s*€/g);
+    const prices = [];
+    for (const match of priceMatches) {
+      const price = parseFloat(match[1].replace(',', '.'));
+      if (price >= 1 && price <= 10000 && !prices.includes(price)) {
+        prices.push(price);
+      }
+    }
+
+    // Pattern 2: Essayer d'extraire les données structurées
+    const jsonMatch = html.match(/"items"\s*:\s*\[([\s\S]*?)\]\s*,\s*"pagination"/);
+    if (jsonMatch) {
+      try {
+        const itemsJson = JSON.parse('[' + jsonMatch[1] + ']');
+        items = itemsJson;
+      } catch (e) {
+        console.log('[ResellScout] Erreur parsing JSON items');
+      }
+    }
+
+    // Si on a trouvé des items structurés
+    if (items.length > 0) {
+      results.prices = items.slice(0, CONFIG.MAX_RESULTS).map(item => ({
+        price: parseFloat(item.price || item.total_item_price || 0),
+        title: item.title || 'Article Vinted',
+        url: `https://www.vinted.fr/items/${item.id}`,
+        image: item.photo?.url || null
+      })).filter(p => p.price > 0);
+    } 
+    // Sinon utiliser les prix extraits
+    else if (prices.length > 0) {
+      results.prices = prices.slice(0, CONFIG.MAX_RESULTS).map((price, i) => ({
+        price: price,
+        title: `Article Vinted #${i + 1}`,
+        url: 'https://www.vinted.fr',
+        image: null
+      }));
+    }
+
+    if (results.prices.length > 0) {
+      const priceValues = results.prices.map(p => p.price);
+      results.minPrice = Math.min(...priceValues);
+      results.maxPrice = Math.max(...priceValues);
+      results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
+      results.count = results.prices.length;
+      results.success = true;
+      console.log('[ResellScout] Vinted HTML succès:', results.count, 'prix trouvés');
+    } else {
+      results.error = 'Aucun prix trouvé dans le HTML';
     }
 
   } catch (error) {
     results.error = error.message;
-    console.warn('[ResellScout] Erreur Vinted:', error.message);
+    console.warn('[ResellScout] Erreur scraping Vinted:', error.message);
   }
 
   return results;
@@ -169,8 +233,8 @@ async function searchEbayPrices(query, options = {}) {
     const cleanQuery = query.replace(/[^\w\s\-àâäéèêëïîôùûüç]/gi, ' ').trim();
     console.log('[ResellScout] Recherche eBay:', cleanQuery);
 
-    // Recherche eBay France - articles d'occasion uniquement (LH_ItemCondition=3000)
-    const searchUrl = `https://www.ebay.fr/sch/i.html?_nkw=${encodeURIComponent(cleanQuery)}&_sop=12&LH_ItemCondition=3000&_ipg=60`;
+    // eBay France - occasion seulement (LH_ItemCondition=3000 = occasion)
+    const searchUrl = `https://www.ebay.fr/sch/i.html?_nkw=${encodeURIComponent(cleanQuery)}&_sop=12&LH_ItemCondition=3000&_ipg=50&rt=nc`;
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
@@ -192,57 +256,75 @@ async function searchEbayPrices(query, options = {}) {
     }
 
     const html = await response.text();
-    console.log('[ResellScout] eBay HTML reçu, longueur:', html.length);
+    console.log('[ResellScout] eBay HTML reçu, taille:', html.length);
 
     // Parser les résultats eBay
     const items = [];
 
-    // Pattern pour les cartes produit eBay
-    // Format: <span class="s-item__price">XX,XX EUR</span>
-    const pricePattern = /<span\s+class="s-item__price"[^>]*>([\d\s,]+)\s*EUR<\/span>/gi;
-    const titlePattern = /<span\s+role="heading"[^>]*>([^<]+)<\/span>/gi;
-    const linkPattern = /<a\s+class="s-item__link"[^>]*href="([^"]+)"/gi;
-    const imagePattern = /<img\s+class="s-item__image-img"[^>]*src="([^"]+)"/gi;
+    // Méthode 1: Extraire les prix avec regex
+    // Format typique: <span class="s-item__price">XX,XX EUR</span>
+    const priceRegex = /class="s-item__price"[^>]*>\s*(\d+(?:[,\.]\d{2})?)\s*EUR/gi;
+    const titleRegex = /class="s-item__title"[^>]*>(?:<span[^>]*>)?([^<]+)/gi;
+    const linkRegex = /class="s-item__link"[^>]*href="([^"]+)"/gi;
+    const imgRegex = /class="s-item__image-img"[^>]*src="([^"]+)"/gi;
 
-    // Extraire les blocs d'items
-    const itemBlocks = html.split(/class="s-item\s/gi).slice(1);
+    // Split par item
+    const itemBlocks = html.split(/class="s-item\s+s-item/gi).slice(1);
     
-    for (const block of itemBlocks.slice(0, CONFIG.MAX_RESULTS)) {
+    for (const block of itemBlocks) {
       try {
-        // Extraire le prix
-        const priceMatch = block.match(/class="s-item__price"[^>]*>([\d\s,]+)\s*EUR/i);
+        // Prix
+        const priceMatch = block.match(/class="s-item__price"[^>]*>\s*(\d+(?:[,\.]\d{2})?)\s*EUR/i);
         if (!priceMatch) continue;
         
-        const priceStr = priceMatch[1].replace(/\s/g, '').replace(',', '.');
-        const price = parseFloat(priceStr);
+        const price = parseFloat(priceMatch[1].replace(',', '.'));
         if (price <= 0 || isNaN(price)) continue;
 
-        // Extraire le titre
-        const titleMatch = block.match(/role="heading"[^>]*>([^<]+)</i);
-        const title = titleMatch ? titleMatch[1].trim() : 'Article eBay';
+        // Titre
+        const titleMatch = block.match(/class="s-item__title"[^>]*>(?:<span[^>]*>)?([^<]+)/i);
+        let title = titleMatch ? titleMatch[1].trim() : 'Article eBay';
+        
+        // Ignorer "Shop on eBay" et items vides
+        if (title.toLowerCase().includes('shop on ebay') || title.length < 3) continue;
 
-        // Extraire le lien
-        const linkMatch = block.match(/class="s-item__link"[^>]*href="([^"]+)"/i);
+        // Lien
+        const linkMatch = block.match(/href="(https:\/\/www\.ebay\.fr\/itm\/[^"]+)"/i);
         const url = linkMatch ? linkMatch[1].split('?')[0] : 'https://www.ebay.fr';
 
-        // Extraire l'image
-        const imgMatch = block.match(/class="s-item__image-img"[^>]*src="([^"]+)"/i) ||
-                        block.match(/src="(https:\/\/i\.ebayimg\.com[^"]+)"/i);
+        // Image
+        const imgMatch = block.match(/src="(https:\/\/i\.ebayimg\.com[^"]+)"/i);
         const image = imgMatch ? imgMatch[1] : null;
-
-        // Ignorer les suggestions "Shop on eBay"
-        if (title.toLowerCase().includes('shop on ebay')) continue;
 
         items.push({ price, title, url, image });
       } catch (e) {
-        // Ignorer les erreurs de parsing individuelles
+        // Ignorer les erreurs de parsing
       }
     }
 
-    // Traitement des résultats
+    // Méthode 2: Extraire simplement les prix si pas d'items structurés
+    if (items.length === 0) {
+      const allPrices = [];
+      const simplePrice = html.matchAll(/(\d+(?:[,\.]\d{2})?)\s*EUR/g);
+      for (const match of simplePrice) {
+        const price = parseFloat(match[1].replace(',', '.'));
+        if (price >= 5 && price <= 10000 && !allPrices.includes(price)) {
+          allPrices.push(price);
+        }
+      }
+      
+      for (const price of allPrices.slice(0, CONFIG.MAX_RESULTS)) {
+        items.push({
+          price,
+          title: 'Article eBay',
+          url: 'https://www.ebay.fr',
+          image: null
+        });
+      }
+    }
+
     if (items.length > 0) {
       results.prices = items.filter(item => item.price > 0);
-
+      
       if (results.prices.length > 0) {
         const priceValues = results.prices.map(p => p.price);
         results.minPrice = Math.min(...priceValues);
@@ -284,6 +366,7 @@ async function searchLeBonCoinPrices(query, options = {}) {
 
   try {
     const cleanQuery = query.replace(/[^\w\s\-àâäéèêëïîôùûüç]/gi, ' ').trim();
+    console.log('[ResellScout] Recherche LeBonCoin:', cleanQuery);
 
     const requestBody = {
       limit: CONFIG.MAX_RESULTS,
@@ -297,12 +380,6 @@ async function searchLeBonCoinPrices(query, options = {}) {
       sort_order: 'desc'
     };
 
-    if (options.categoryId) {
-      requestBody.filters.category.id = options.categoryId;
-    }
-
-    console.log('[ResellScout] Recherche LeBonCoin:', cleanQuery);
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
 
@@ -311,18 +388,20 @@ async function searchLeBonCoinPrices(query, options = {}) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'api_key': 'ba0c2dad52b3ec',
         'Origin': 'https://www.leboncoin.fr',
         'Referer': 'https://www.leboncoin.fr/'
       },
       body: JSON.stringify(requestBody),
-      credentials: 'include',
       signal: controller.signal
     });
 
     clearTimeout(timeoutId);
+    console.log('[ResellScout] LeBonCoin response status:', response.status);
 
     if (!response.ok) {
-      throw new Error(`LeBonCoin API error: ${response.status}`);
+      // Fallback: scraper HTML
+      return await scrapeLeBonCoinHTML(cleanQuery);
     }
 
     const data = await response.json();
@@ -332,11 +411,9 @@ async function searchLeBonCoinPrices(query, options = {}) {
         .filter(ad => ad.price && ad.price[0])
         .map(ad => ({
           price: parseFloat(ad.price[0]),
-          title: ad.subject,
-          url: ad.url,
+          title: ad.subject || 'Annonce LeBonCoin',
+          url: ad.url || 'https://www.leboncoin.fr',
           location: ad.location?.city,
-          date: ad.first_publication_date,
-          photo: ad.images?.urls?.[0],
           image: ad.images?.urls?.[0] || ad.images?.thumb_url || null
         }))
         .filter(item => item.price > 0);
@@ -348,14 +425,95 @@ async function searchLeBonCoinPrices(query, options = {}) {
         results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
         results.count = results.prices.length;
         results.success = true;
+        console.log('[ResellScout] LeBonCoin succès:', results.count, 'annonces');
       }
     }
 
-    console.log('[ResellScout] LeBonCoin résultats:', results.count, 'annonces trouvées');
+    if (!results.success) {
+      return await scrapeLeBonCoinHTML(cleanQuery);
+    }
+
+  } catch (error) {
+    console.warn('[ResellScout] Erreur LeBonCoin API:', error.message);
+    try {
+      return await scrapeLeBonCoinHTML(query);
+    } catch (e) {
+      results.error = error.message;
+    }
+  }
+
+  return results;
+}
+
+// Fallback: Scraper HTML LeBonCoin
+async function scrapeLeBonCoinHTML(query) {
+  const results = {
+    source: 'LeBonCoin',
+    prices: [],
+    avgPrice: null,
+    minPrice: null,
+    maxPrice: null,
+    count: 0,
+    success: false,
+    error: null
+  };
+
+  try {
+    const cleanQuery = encodeURIComponent(query.trim());
+    const searchUrl = `https://www.leboncoin.fr/recherche?text=${cleanQuery}`;
+    
+    console.log('[ResellScout] Scraping LeBonCoin HTML');
+
+    const response = await fetch(searchUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'fr-FR,fr;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    console.log('[ResellScout] LeBonCoin HTML reçu, taille:', html.length);
+
+    // Extraire les prix du HTML
+    const priceMatches = html.matchAll(/(\d+(?:\s\d{3})*)\s*€/g);
+    const prices = [];
+    
+    for (const match of priceMatches) {
+      const priceStr = match[1].replace(/\s/g, '');
+      const price = parseFloat(priceStr);
+      if (price >= 1 && price <= 50000 && !prices.includes(price)) {
+        prices.push(price);
+      }
+    }
+
+    if (prices.length > 0) {
+      results.prices = prices.slice(0, CONFIG.MAX_RESULTS).map((price, i) => ({
+        price: price,
+        title: `Annonce LeBonCoin #${i + 1}`,
+        url: 'https://www.leboncoin.fr',
+        image: null
+      }));
+
+      const priceValues = results.prices.map(p => p.price);
+      results.minPrice = Math.min(...priceValues);
+      results.maxPrice = Math.max(...priceValues);
+      results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
+      results.count = results.prices.length;
+      results.success = true;
+      console.log('[ResellScout] LeBonCoin HTML succès:', results.count, 'prix');
+    } else {
+      results.error = 'Aucun prix trouvé';
+    }
 
   } catch (error) {
     results.error = error.message;
-    console.warn('[ResellScout] Erreur LeBonCoin:', error.message);
+    console.warn('[ResellScout] Erreur scraping LeBonCoin:', error.message);
   }
 
   return results;
@@ -368,10 +526,9 @@ async function searchLeBonCoinPrices(query, options = {}) {
 function extractKeywords(title) {
   if (!title) return { model: null, brand: null, keywords: [], numbers: [], searchQuery: null };
   
-  // Normaliser le titre
   let normalized = title.toLowerCase().trim();
   
-  // Normaliser les variantes de CPU Intel: "Core I7 9700 KF" -> "i7 9700kf"
+  // Normaliser les variantes CPU Intel
   normalized = normalized
     .replace(/core\s*/gi, '')
     .replace(/processeur\s*/gi, '')
@@ -385,19 +542,16 @@ function extractKeywords(title) {
   
   console.log('[ResellScout] Titre normalisé:', normalized);
   
-  // Patterns pour les numéros de modèle
+  // Patterns pour modèles
   const modelPatterns = [
     /\b(rtx|gtx)\s*(\d{3,4})\s*(ti|super)?\b/gi,
     /\b(rx)\s*(\d{3,4})\s*(xt|xtx)?\b/gi,
-    /\b(radeon|geforce)\s*(rtx|gtx|rx)?\s*(\d{3,4})\s*(ti|super|xt)?\b/gi,
     /\b(i[3579])\s*[-]?\s*(\d{4,5})([kfx]*)\b/gi,
     /\b(ryzen\s*[3579])\s*(\d{4}[a-z]*)\b/gi,
-    /\b(r[3579])\s*(\d{4}[a-z]*)\b/gi,
     /\b(iphone|ipad)\s*(\d{1,2})\s*(pro|max|plus|mini)?\b/gi,
-    /\b(galaxy)\s*(s|a|z|note)?\s*(\d{1,2})\s*(ultra|plus|fe)?\b/gi,
-    /\b(pixel)\s*(\d{1,2})\s*(pro|a)?\b/gi,
+    /\b(galaxy)\s*(s|a|z)?\s*(\d{1,2})\s*(ultra|plus)?\b/gi,
     /\b(ps[45]|playstation\s*[45])\s*(pro|slim)?\b/gi,
-    /\b(xbox)\s*(series\s*[xs]|one|one\s*[xs])?\b/gi,
+    /\b(xbox)\s*(series\s*[xs]|one)?\b/gi,
     /\b(switch)\s*(oled|lite)?\b/gi,
   ];
   
@@ -410,7 +564,7 @@ function extractKeywords(title) {
     }
   }
   
-  // Si pas de match, essayer de construire un modèle CPU
+  // CPU pattern
   if (!modelMatch) {
     const cpuMatch = normalized.match(/i([3579])\s*[-]?\s*(\d{4,5})([kfx]*)/i);
     if (cpuMatch) {
@@ -418,7 +572,7 @@ function extractKeywords(title) {
     }
   }
   
-  // Extraire les nombres significatifs
+  // Extraire les nombres
   const numbers = [];
   const numberMatches = normalized.match(/\b\d{4,5}[a-z]*\b/gi) || [];
   numberMatches.forEach(n => {
@@ -428,72 +582,36 @@ function extractKeywords(title) {
   });
   
   // Marques connues
-  const knownBrands = [
-    'nvidia', 'amd', 'intel', 'asus', 'msi', 'gigabyte', 'evga', 'zotac', 'sapphire', 'powercolor',
-    'apple', 'samsung', 'sony', 'microsoft', 'nintendo', 'logitech', 'razer', 'corsair', 'steelseries',
-    'hp', 'dell', 'lenovo', 'acer', 'lg', 'benq', 'aoc', 'viewsonic',
-    'seagate', 'western digital', 'wd', 'crucial', 'kingston', 'sandisk'
-  ];
-  
+  const brands = ['nvidia', 'amd', 'intel', 'apple', 'samsung', 'sony', 'microsoft', 'nintendo', 'asus', 'msi', 'gigabyte', 'evga', 'zotac', 'google', 'xiaomi', 'huawei'];
   let brand = null;
-  if (/\bi[3579]\b/i.test(normalized)) {
-    brand = 'intel';
+  for (const b of brands) {
+    if (normalized.includes(b)) {
+      brand = b;
+      break;
+    }
+  }
+  
+  // Mots-clés significatifs
+  const stopWords = ['le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'ou', 'en', 'avec', 'pour', 'sur', 'par', 'dans', 'ce', 'cette', 'très', 'bon', 'état', 'etat', 'comme', 'neuf', 'occasion', 'vends', 'vend', 'urgent'];
+  const words = normalized.split(/\s+/).filter(w => w.length > 2 && !stopWords.includes(w));
+  
+  // Construire la requête
+  let searchQuery = '';
+  if (modelMatch) {
+    searchQuery = modelMatch;
+    if (brand && !modelMatch.includes(brand)) {
+      searchQuery = `${brand} ${searchQuery}`;
+    }
   } else {
-    for (const b of knownBrands) {
-      if (normalized.includes(b)) {
-        brand = b;
-        break;
-      }
-    }
+    searchQuery = words.slice(0, 5).join(' ');
   }
-  
-  // Détecter le type de produit
-  let productType = 'other';
-  if (/\b(rtx|gtx|rx|radeon|geforce)\s*\d{3,4}/i.test(normalized)) {
-    productType = 'gpu';
-  } else if (/\bi[3579]\s*[-]?\s*\d{4,5}/i.test(normalized) || /\b(ryzen|r[3579])\s*\d{4}/i.test(normalized)) {
-    productType = 'cpu';
-  } else if (/\biphone|ipad|galaxy|pixel\b/i.test(normalized)) {
-    productType = 'phone';
-  } else if (/\bps[45]|playstation|xbox|switch\b/i.test(normalized)) {
-    productType = 'console';
-  } else if (/\bécran|moniteur|monitor\b/i.test(normalized)) {
-    productType = 'monitor';
-  }
-  
-  // Mots-clés importants
-  const stopWords = ['le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'ou', 'the', 'a', 'an', 
-                      'for', 'with', 'très', 'bon', 'état', 'neuf', 'occasion', 'comme', 'parfait',
-                      'excellent', 'good', 'great', 'new', 'used', 'etat', 'tbe', 'ttbe', 'lga',
-                      'socket', 'processeur', 'processor', 'core'];
-  
-  const words = normalized
-    .replace(/[^\w\s\-]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !stopWords.includes(w));
-  
-  // Construire une requête de recherche optimisée
-  let searchQuery = modelMatch || '';
-  if (!searchQuery && numbers.length > 0) {
-    const mainNumber = numbers.find(n => n.length >= 4) || numbers[0];
-    if (productType === 'cpu' && /\bi[3579]/i.test(normalized)) {
-      const iMatch = normalized.match(/i([3579])/i);
-      if (iMatch) {
-        searchQuery = `i${iMatch[1]} ${mainNumber}`;
-      }
-    }
-  }
-  
-  console.log('[ResellScout] Modèle extrait:', modelMatch, '| Query:', searchQuery);
-  
+
   return {
     model: modelMatch,
     brand: brand,
-    productType: productType,
-    keywords: words,
+    keywords: words.slice(0, 10),
     numbers: numbers,
-    original: title,
-    searchQuery: searchQuery
+    searchQuery: searchQuery.trim()
   };
 }
 
@@ -502,121 +620,25 @@ function extractKeywords(title) {
 // ============================================
 
 function calculateRelevanceScore(result, searchKeywords) {
-  const resultTitle = (result.title || '').toLowerCase();
+  if (!result || !result.title) return 0;
+  
+  const resultTitle = result.title.toLowerCase();
   let score = 0;
   let maxScore = 0;
   
-  // EXCLUSIONS GÉNÉRALES
-  const alwaysExclude = [
-    'lot de', 'pack de', 'bundle', 'kit complet',
-    'tout inclus', 'prêt à jouer', 'pret a jouer',
-    'recherche', 'cherche', 'échange', 'echange', 'troc',
-    'achat', 'achète', 'achete'
-  ];
+  // Mots exclusifs (indiquent un produit différent)
+  const exclusiveWords = ['lot de', 'pack de', 'boîtier', 'boitier', 'alimentation', 'câble', 'cable', 'housse', 'coque', 'protection', 'chargeur', 'adaptateur', 'support', 'pièce', 'piece', 'réparation', 'reparation', 'hs', 'pour pièces', 'ne fonctionne pas', 'défectueux', 'defectueux'];
   
-  for (const exclusion of alwaysExclude) {
-    if (resultTitle.includes(exclusion)) {
-      return -1;
+  for (const word of exclusiveWords) {
+    if (resultTitle.includes(word)) {
+      return -1; // Exclure
     }
   }
   
-  // EXCLUSIONS SPÉCIFIQUES AU TYPE DE PRODUIT
-  const productType = searchKeywords.productType;
-  
-  if (productType === 'gpu') {
-    const gpuExclusions = [
-      'pc gamer', 'pc gaming', 'pc complet', 'pc fixe', 'ordinateur',
-      'tour complète', 'tour complete', 'config', 'configuration',
-      'setup complet', 'setup gaming', 'desktop',
-      'unité centrale', 'unite centrale',
-      'laptop', 'portable', 'notebook', 'ultrabook', 'macbook'
-    ];
-    
-    for (const exclusion of gpuExclusions) {
-      if (resultTitle.includes(exclusion)) {
-        return -1;
-      }
-    }
-    
-    if (/\b(i[3579]|ryzen\s*[3579]|r[3579]|core)[-\s]*\d{4,5}\b/i.test(resultTitle)) {
-      return -1;
-    }
-    if (/\b\d+\s*go?\s*(de\s*)?(ram|ddr)/i.test(resultTitle)) {
-      return -1;
-    }
-    if (/\b\d+\s*(to|tb|go|gb)\s*(ssd|hdd|nvme)/i.test(resultTitle)) {
-      return -1;
-    }
-  }
-  
-  if (productType === 'cpu') {
-    const cpuExclusions = [
-      'pc gamer', 'pc gaming', 'pc complet', 'pc fixe', 'ordinateur',
-      'tour complète', 'tour complete', 'config complète', 'configuration',
-      'setup complet', 'desktop complet', 'pc de bureau', 'pc bureau',
-      'laptop', 'portable', 'notebook',
-      'unité centrale', 'unite centrale'
-    ];
-    
-    for (const exclusion of cpuExclusions) {
-      if (resultTitle.includes(exclusion)) {
-        return -1;
-      }
-    }
-    
-    // Exclure si pattern "pc " au début ou " pc " au milieu
-    if (/^pc\s/i.test(resultTitle) || /\spc\s/i.test(resultTitle)) {
-      return -1;
-    }
-    
-    if (/\b(rtx|gtx|rx|radeon|geforce)\s*\d{3,4}/i.test(resultTitle)) {
-      return -1;
-    }
-    if (/\b\d+\s*go?\s*(de\s*)?(ram|ddr)/i.test(resultTitle)) {
-      return -1;
-    }
-    if (/\b\d+\s*(to|tb|go|gb)\s*(ssd|hdd|nvme)/i.test(resultTitle)) {
-      return -1;
-    }
-    if (/\+.*\+/i.test(resultTitle)) {
-      return -1;
-    }
-    if (/carte\s*m[eè]re|motherboard|mobo/i.test(resultTitle)) {
-      return -1;
-    }
-  }
-  
-  if (productType === 'phone') {
-    const phoneExclusions = [
-      'coque', 'etui', 'protection', 'chargeur seul', 'câble',
-      'pièces', 'pieces', 'pour pièces', 'hs', 'bloqué', 'bloque',
-      'ecran seul', 'écran seul', 'batterie seule',
-    ];
-    
-    for (const exclusion of phoneExclusions) {
-      if (resultTitle.includes(exclusion)) {
-        return -1;
-      }
-    }
-  }
-  
-  if (productType === 'console') {
-    const consoleExclusions = [
-      'jeu ', 'jeux ', 'manette seule', 'controller',
-      'pour pièces', 'hs', 'en panne',
-    ];
-    
-    for (const exclusion of consoleExclusions) {
-      if (resultTitle.includes(exclusion)) {
-        return -1;
-      }
-    }
-  }
-  
-  // CALCUL DU SCORE
+  // Score basé sur le modèle
   if (searchKeywords.model) {
     maxScore += 50;
-    const modelNormalized = searchKeywords.model.replace(/\s+/g, '').toLowerCase();
+    const modelNormalized = searchKeywords.model.toLowerCase().replace(/\s+/g, '');
     const resultNormalized = resultTitle.replace(/\s+/g, '');
     
     if (resultNormalized.includes(modelNormalized)) {
@@ -626,18 +648,19 @@ function calculateRelevanceScore(result, searchKeywords) {
     }
   }
   
+  // Score basé sur les nombres
   if (searchKeywords.numbers.length > 0) {
     maxScore += 30;
     let numbersFound = 0;
     for (const num of searchKeywords.numbers) {
-      const numPattern = new RegExp(`\\b${num}\\b`, 'i');
-      if (numPattern.test(resultTitle)) {
+      if (resultTitle.includes(num)) {
         numbersFound++;
       }
     }
     score += (numbersFound / searchKeywords.numbers.length) * 30;
   }
   
+  // Score basé sur la marque
   if (searchKeywords.brand) {
     maxScore += 10;
     if (resultTitle.includes(searchKeywords.brand)) {
@@ -645,6 +668,7 @@ function calculateRelevanceScore(result, searchKeywords) {
     }
   }
   
+  // Score basé sur les mots-clés
   if (searchKeywords.keywords.length > 0) {
     maxScore += 10;
     let keywordsFound = 0;
@@ -663,7 +687,7 @@ function calculateRelevanceScore(result, searchKeywords) {
 // FILTRAGE DES RÉSULTATS
 // ============================================
 
-function filterRelevantResults(results, searchKeywords, minScore = 40) {
+function filterRelevantResults(results, searchKeywords, minScore = 30) {
   if (!results || results.length === 0) return [];
   
   const scored = results.map(result => ({
@@ -677,7 +701,7 @@ function filterRelevantResults(results, searchKeywords, minScore = 40) {
   
   filtered.sort((a, b) => b.relevanceScore - a.relevanceScore);
   
-  console.log(`[ResellScout] Filtrage: ${results.length} résultats → ${filtered.length} gardés (${excluded} exclus, ${lowScore} score trop bas)`);
+  console.log(`[ResellScout] Filtrage: ${results.length} → ${filtered.length} (${excluded} exclus, ${lowScore} score bas)`);
   
   return filtered;
 }
@@ -692,16 +716,7 @@ async function fetchAllPrices(productData) {
   const searchKeywords = extractKeywords(title);
   console.log('[ResellScout] Mots-clés extraits:', searchKeywords);
   
-  // Construire la requête de recherche optimisée
-  let searchQuery = '';
-  
-  if (searchKeywords.searchQuery) {
-    searchQuery = searchKeywords.searchQuery;
-  } else if (searchKeywords.model) {
-    searchQuery = searchKeywords.model;
-  } else {
-    searchQuery = title || '';
-  }
+  let searchQuery = searchKeywords.searchQuery || searchKeywords.model || title || '';
   
   if (searchKeywords.brand && !searchQuery.toLowerCase().includes(searchKeywords.brand)) {
     searchQuery = `${searchKeywords.brand} ${searchQuery}`;
@@ -714,9 +729,9 @@ async function fetchAllPrices(productData) {
     .trim()
     .substring(0, 60);
 
-  console.log(`[ResellScout] Recherche de prix pour: "${searchQuery}"`);
+  console.log(`[ResellScout] Recherche: "${searchQuery}"`);
 
-  // Lancer les recherches en parallèle - SEULEMENT OCCASION
+  // Lancer les 3 recherches en parallèle
   const [vintedResults, leboncoinResults, ebayResults] = await Promise.allSettled([
     searchVintedPrices(searchQuery),
     searchLeBonCoinPrices(searchQuery),
@@ -728,6 +743,7 @@ async function fetchAllPrices(productData) {
   let filteredLeboncoin = [];
   let filteredEbay = [];
 
+  // Traiter Vinted
   if (vintedResults.status === 'fulfilled' && vintedResults.value.success) {
     filteredVinted = filterRelevantResults(vintedResults.value.prices, searchKeywords);
     if (filteredVinted.length > 0) {
@@ -742,7 +758,9 @@ async function fetchAllPrices(productData) {
       });
     }
   }
+  console.log('[ResellScout] Vinted:', vintedResults.status, vintedResults.value?.count || 0, 'brut,', filteredVinted.length, 'filtré');
 
+  // Traiter LeBonCoin
   if (leboncoinResults.status === 'fulfilled' && leboncoinResults.value.success) {
     filteredLeboncoin = filterRelevantResults(leboncoinResults.value.prices, searchKeywords);
     if (filteredLeboncoin.length > 0) {
@@ -757,7 +775,9 @@ async function fetchAllPrices(productData) {
       });
     }
   }
+  console.log('[ResellScout] LeBonCoin:', leboncoinResults.status, leboncoinResults.value?.count || 0, 'brut,', filteredLeboncoin.length, 'filtré');
 
+  // Traiter eBay
   if (ebayResults.status === 'fulfilled' && ebayResults.value.success) {
     filteredEbay = filterRelevantResults(ebayResults.value.prices, searchKeywords);
     if (filteredEbay.length > 0) {
@@ -772,6 +792,7 @@ async function fetchAllPrices(productData) {
       });
     }
   }
+  console.log('[ResellScout] eBay:', ebayResults.status, ebayResults.value?.count || 0, 'brut,', filteredEbay.length, 'filtré');
 
   const allOccasionPrices = occasionSources.flatMap(s => s.prices.map(p => p.price));
 
@@ -817,7 +838,7 @@ async function fetchAllPrices(productData) {
     }
   };
 
-  console.log('[ResellScout] Résultats agrégés:', result.occasionPrice.count, 'prix occasion');
+  console.log('[ResellScout] Total:', result.occasionPrice.count, 'prix de', occasionSources.length, 'sources');
 
   return result;
 }
@@ -861,11 +882,9 @@ function calculateProfitability(currentPrice, priceData) {
   }
 
   let score = 50;
-
   if (result.vsOccasion.available) {
     score += result.vsOccasion.percentDiff * 2;
   }
-
   score = Math.max(0, Math.min(100, score));
   result.dealScore = Math.round(score);
 
@@ -899,179 +918,85 @@ function calculateProfitability(currentPrice, priceData) {
 function transformAnalysisForOverlay(analysis) {
   const { product, prices, profitability } = analysis;
   
-  let rating = 'fair';
-  let emoji = '⚡';
-  let ratingLabel = 'Prix correct';
+  // Sources avec détails
+  const sources = [];
   
-  if (!profitability.vsOccasion.available) {
-    rating = 'loading';
-    emoji = '❓';
-    ratingLabel = 'Données insuffisantes';
-  } else if (profitability.dealScore >= 80) {
-    rating = 'excellent';
-    emoji = '🔥';
-    ratingLabel = 'Affaire exceptionnelle';
-  } else if (profitability.dealScore >= 65) {
-    rating = 'good';
-    emoji = '✅';
-    ratingLabel = 'Bonne affaire';
-  } else if (profitability.dealScore >= 50) {
-    rating = 'fair';
-    emoji = '⚡';
-    ratingLabel = 'Prix correct';
-  } else if (profitability.dealScore >= 35) {
-    rating = 'overpriced';
-    emoji = '⚠️';
-    ratingLabel = 'Prix élevé';
-  } else {
-    rating = 'overpriced';
-    emoji = '❌';
-    ratingLabel = 'Trop cher';
+  if (prices.rawResults?.vinted) {
+    sources.push({
+      name: 'Vinted',
+      count: prices.rawResults.vinted.filteredCount || 0,
+      avgPrice: prices.rawResults.vinted.avgPrice,
+      minPrice: prices.rawResults.vinted.minPrice,
+      maxPrice: prices.rawResults.vinted.maxPrice,
+      items: prices.rawResults.vinted.prices || [],
+      error: prices.rawResults.vinted.error
+    });
   }
-
-  const profit = profitability.vsOccasion.difference || 0;
-  const discount = profitability.vsOccasion.percentDiff || 0;
-
-  let confidence = 'none';
-  const occasionCount = prices.occasionPrice.count || 0;
-  const sourcesCount = prices.occasionPrice.sources?.length || 0;
   
-  if (occasionCount >= 15 && sourcesCount >= 2) {
-    confidence = 'high';
-  } else if (occasionCount >= 5 || sourcesCount >= 1) {
-    confidence = 'medium';
-  } else if (occasionCount > 0) {
-    confidence = 'low';
+  if (prices.rawResults?.leboncoin) {
+    sources.push({
+      name: 'LeBonCoin',
+      count: prices.rawResults.leboncoin.filteredCount || 0,
+      avgPrice: prices.rawResults.leboncoin.avgPrice,
+      minPrice: prices.rawResults.leboncoin.minPrice,
+      maxPrice: prices.rawResults.leboncoin.maxPrice,
+      items: prices.rawResults.leboncoin.prices || [],
+      error: prices.rawResults.leboncoin.error
+    });
   }
-
-  const sourcesUsed = prices.occasionPrice.sources?.map(s => s.name) || [];
-
-  const usedListings = [];
   
-  if (prices.rawResults) {
-    if (prices.rawResults.vinted && prices.rawResults.vinted.prices) {
-      prices.rawResults.vinted.prices.forEach(item => {
-        usedListings.push({
-          ...item,
-          platform: 'Vinted',
-          source: 'vinted'
-        });
-      });
-    }
-    
-    if (prices.rawResults.leboncoin && prices.rawResults.leboncoin.prices) {
-      prices.rawResults.leboncoin.prices.forEach(item => {
-        usedListings.push({
-          ...item,
-          platform: 'LeBonCoin',
-          source: 'leboncoin'
-        });
-      });
-    }
+  if (prices.rawResults?.ebay) {
+    sources.push({
+      name: 'eBay',
+      count: prices.rawResults.ebay.filteredCount || 0,
+      avgPrice: prices.rawResults.ebay.avgPrice,
+      minPrice: prices.rawResults.ebay.minPrice,
+      maxPrice: prices.rawResults.ebay.maxPrice,
+      items: prices.rawResults.ebay.prices || [],
+      error: prices.rawResults.ebay.error
+    });
   }
-
-  usedListings.sort((a, b) => a.price - b.price);
 
   return {
-    currentPrice: product.price,
-    averageUsedPrice: prices.occasionPrice.available ? prices.occasionPrice.avg : null,
-    
-    profit: profit,
-    discount: discount,
-    
-    rating: rating,
-    emoji: emoji,
-    ratingLabel: ratingLabel,
-    dealScore: profitability.dealScore,
-    
-    source: sourcesUsed.length > 0 ? sourcesUsed[0] : 'Aucune source',
-    sourcesUsed: sourcesUsed,
-    dataPoints: occasionCount,
-    confidence: confidence,
-    
-    priceRange: {
-      min: prices.occasionPrice.min,
-      max: prices.occasionPrice.max
+    product: {
+      title: product.title,
+      price: product.price,
+      platform: product.platform,
+      image: product.image,
+      url: product.url
     },
     
-    brandInfo: product.brand ? { brand: product.brand } : null,
-    recommendation: profitability.recommendation,
+    searchQuery: prices.query,
     
-    oldPrice: product.oldPrice || null,
-    priceDrop: product.priceDrop || null,
-    hasPriceDrop: product.hasPriceDrop || false,
-    listingAge: product.listingAge || null,
-    originalDate: product.originalDate || null,
-
-    usedSources: usedListings,
-    newSources: [],
+    market: {
+      avgPrice: prices.occasionPrice.avg,
+      minPrice: prices.occasionPrice.min,
+      maxPrice: prices.occasionPrice.max,
+      totalListings: prices.occasionPrice.count,
+      sources: sources
+    },
     
-    // Requête de recherche utilisée (pour permettre la modification)
-    searchQuery: prices.query || null
-  };
-}
-
-// ============================================
-// ANALYSE COMPLÈTE
-// ============================================
-
-async function handleAnalyzeProduct(productData) {
-  console.log('[ResellScout] Analyse du produit:', productData);
-
-  if (!productData || (!productData.title && !productData.price)) {
-    console.error('[ResellScout] Données produit invalides');
-    return {
-      product: productData,
-      prices: { occasionPrice: { available: false } },
-      profitability: { dealScore: 50, vsOccasion: { available: false } },
-      error: 'Données produit insuffisantes'
-    };
-  }
-
-  const priceData = await fetchAllPrices(productData);
-  const profitability = calculateProfitability(productData.price || 0, priceData);
-
-  const analysis = {
-    product: productData,
-    prices: priceData,
-    profitability: profitability,
-    timestamp: Date.now(),
-    
-    summary: {
-      currentPrice: productData.price,
-      marketPrice: priceData.occasionPrice.avg,
+    analysis: {
       dealScore: profitability.dealScore,
       dealRating: profitability.dealRating,
       recommendation: profitability.recommendation,
-      sources: {
-        occasion: priceData.occasionPrice.sources?.map(s => s.name) || []
-      }
-    }
+      priceDifference: profitability.vsOccasion.difference,
+      percentDiff: profitability.vsOccasion.percentDiff,
+      verdict: profitability.vsOccasion.verdict
+    },
+    
+    timestamp: prices.timestamp
   };
-
-  try {
-    await saveToHistory(analysis);
-  } catch (e) {
-    console.warn('[ResellScout] Erreur sauvegarde historique:', e);
-  }
-
-  return analysis;
 }
 
 // ============================================
-// GESTION DES MESSAGES
+// MESSAGE HANDLERS
 // ============================================
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[ResellScout] Message reçu:', message.type || message.action);
-
-  if (message.action === 'analyzeItem') {
-    handleAnalyzeProduct(message.itemData)
-      .then(analysis => {
-        const result = transformAnalysisForOverlay(analysis);
-        console.log('[ResellScout] Analyse terminée, envoi résultat');
-        sendResponse({ success: true, analysis: result });
-      })
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'analyzeProduct') {
+    handleAnalyzeProduct(request.data, request.customQuery)
+      .then(result => sendResponse({ success: true, data: result }))
       .catch(error => {
         console.error('[ResellScout] Erreur analyse:', error);
         sendResponse({ success: false, error: error.message });
@@ -1079,107 +1004,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'ANALYZE_PRODUCT') {
-    handleAnalyzeProduct(message.data)
+  if (request.action === 'searchPrices') {
+    fetchAllPrices({ title: request.query })
       .then(result => sendResponse({ success: true, data: result }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-
-  if (message.type === 'GET_PRICE_DATA') {
-    fetchAllPrices(message.data)
-      .then(result => sendResponse({ success: true, data: result }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (message.action === 'getHistory' || message.type === 'GET_HISTORY') {
-    getHistory()
-      .then(history => sendResponse({ success: true, history: history, data: history }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (message.action === 'clearHistory') {
-    chrome.storage.local.set({ history: [] })
-      .then(() => sendResponse({ success: true }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (message.action === 'getSettings') {
-    chrome.storage.local.get('settings')
-      .then(result => sendResponse({ success: true, settings: result.settings }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (message.action === 'saveSettings') {
-    chrome.storage.local.set({ settings: message.settings })
-      .then(() => sendResponse({ success: true }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  console.warn('[ResellScout] Message non géré:', message);
-  sendResponse({ success: false, error: 'Action non reconnue' });
-  return false;
 });
 
-// ============================================
-// HISTORIQUE
-// ============================================
-
-async function saveToHistory(analysis) {
-  try {
-    const result = await chrome.storage.local.get('history');
-    const history = result.history || [];
-    
-    history.unshift({
-      id: Date.now(),
-      ...analysis,
-      savedAt: new Date().toISOString()
-    });
-
-    if (history.length > 100) {
-      history.splice(100);
-    }
-
-    await chrome.storage.local.set({ history });
-    console.log('[ResellScout] Analyse sauvegardée');
-  } catch (error) {
-    console.error('[ResellScout] Erreur sauvegarde:', error);
-  }
-}
-
-async function getHistory() {
-  try {
-    const result = await chrome.storage.local.get('history');
-    return result.history || [];
-  } catch (error) {
-    console.error('[ResellScout] Erreur récupération historique:', error);
-    return [];
-  }
-}
-
-// ============================================
-// INITIALISATION
-// ============================================
-
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('[ResellScout] Extension installée - v4.0');
+async function handleAnalyzeProduct(productData, customQuery = null) {
+  console.log('[ResellScout] Analyse produit:', productData.title);
   
-  chrome.storage.local.set({
-    settings: {
-      enabled: true,
-      autoAnalyze: true,
-      showOverlay: true,
-      sources: {
-        vinted: true,
-        leboncoin: true
-      }
-    }
-  });
-});
+  const searchData = customQuery ? { ...productData, title: customQuery } : productData;
+  
+  const prices = await fetchAllPrices(searchData);
+  const profitability = calculateProfitability(productData.price, prices);
+  
+  const analysis = {
+    product: productData,
+    prices: prices,
+    profitability: profitability
+  };
+  
+  return transformAnalysisForOverlay(analysis);
+}
 
-console.log('[ResellScout] Service Worker chargé - v4.0 (Vinted + LeBonCoin uniquement)');
+console.log('[ResellScout] Service Worker v6.0 chargé - Sources: Vinted, LeBonCoin, eBay');
