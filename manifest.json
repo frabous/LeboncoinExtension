@@ -17,7 +17,9 @@
   ],
   "host_permissions": [
     "*://*.vinted.fr/*",
-    "*://*.leboncoin.fr/*"
+    "*://*.vinted.com/*",
+    "*://*.leboncoin.fr/*",
+    "https://www.vinted.fr/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",

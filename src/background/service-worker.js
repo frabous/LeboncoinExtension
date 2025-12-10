@@ -1,5 +1,5 @@
 /**
- * ResellScout - Service Worker v4.0
+ * ResellScout - Service Worker v4.1
  * 100% Prix Réels - Sources: Vinted et LeBonCoin uniquement
  */
 
@@ -9,7 +9,7 @@
 
 const CONFIG = {
   REQUEST_DELAY: 500,
-  TIMEOUT: 10000,
+  TIMEOUT: 15000,
   MAX_RESULTS: 30
 };
 
@@ -31,72 +31,108 @@ async function searchVintedPrices(query, options = {}) {
 
   try {
     const cleanQuery = query.replace(/[^\w\s\-àâäéèêëïîôùûüç]/gi, ' ').trim();
-    
-    const searchParams = new URLSearchParams({
-      search_text: cleanQuery,
-      order: 'relevance',
-      per_page: String(CONFIG.MAX_RESULTS)
-    });
-
-    if (options.categoryId) {
-      searchParams.set('catalog_ids', options.categoryId);
-    }
-
-    const searchUrl = `https://www.vinted.fr/api/v2/catalog/items?${searchParams}`;
     console.log('[ResellScout] Recherche Vinted:', cleanQuery);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
+    // URLs à essayer dans l'ordre
+    const searchUrls = [
+      `https://www.vinted.fr/api/v2/catalog/items?search_text=${encodeURIComponent(cleanQuery)}&order=relevance&per_page=${CONFIG.MAX_RESULTS}`,
+      `https://www.vinted.fr/api/v2/items?search_text=${encodeURIComponent(cleanQuery)}&per_page=${CONFIG.MAX_RESULTS}`
+    ];
 
-    const response = await fetch(searchUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'fr-FR,fr;q=0.9',
-        'X-Requested-With': 'XMLHttpRequest'
-      },
-      credentials: 'include',
-      signal: controller.signal
-    });
+    let data = null;
+    let lastError = null;
 
-    clearTimeout(timeoutId);
+    // Essayer chaque URL jusqu'à ce qu'une fonctionne
+    for (const searchUrl of searchUrls) {
+      try {
+        console.log('[ResellScout] Essai URL:', searchUrl.substring(0, 60) + '...');
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Vinted API error: ${response.status}`);
-    }
+        // Méthode 1: Avec credentials (si cookies disponibles)
+        let response;
+        try {
+          response = await fetch(searchUrl, {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json, text/plain, */*',
+              'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache'
+            },
+            credentials: 'include',
+            signal: controller.signal
+          });
+        } catch (fetchError) {
+          console.log('[ResellScout] Fetch avec credentials échoué, essai sans...');
+          // Méthode 2: Sans credentials
+          response = await fetch(searchUrl, {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json, text/plain, */*',
+              'Accept-Language': 'fr-FR,fr;q=0.9'
+            },
+            signal: controller.signal
+          });
+        }
 
-    const data = await response.json();
-    
-    if (data.items && data.items.length > 0) {
-      results.prices = data.items
-        .filter(item => item.price || item.total_item_price)
-        .map(item => ({
-          price: parseFloat(item.price || item.total_item_price),
-          title: item.title,
-          url: `https://www.vinted.fr/items/${item.id}`,
-          condition: item.status,
-          brand: item.brand_title,
-          size: item.size_title,
-          photo: item.photo?.url,
-          image: item.photo?.url || item.photos?.[0]?.url || null
-        }))
-        .filter(item => item.price > 0);
+        clearTimeout(timeoutId);
 
-      if (results.prices.length > 0) {
-        const priceValues = results.prices.map(p => p.price);
-        results.minPrice = Math.min(...priceValues);
-        results.maxPrice = Math.max(...priceValues);
-        results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
-        results.count = results.prices.length;
-        results.success = true;
+        if (response.ok) {
+          data = await response.json();
+          console.log('[ResellScout] Vinted réponse OK:', data);
+          break; // Sortir de la boucle si succès
+        } else {
+          lastError = `HTTP ${response.status}`;
+          console.log('[ResellScout] Vinted erreur HTTP:', response.status);
+        }
+      } catch (e) {
+        lastError = e.message;
+        console.log('[ResellScout] Erreur Vinted URL:', e.message);
       }
     }
 
-    console.log('[ResellScout] Vinted résultats:', results.count, 'articles trouvés');
+    // Traitement des résultats
+    if (data) {
+      const items = data.items || data.data || [];
+      
+      if (items.length > 0) {
+        results.prices = items
+          .filter(item => item.price || item.total_item_price || item.price_numeric)
+          .map(item => {
+            const price = parseFloat(item.price || item.total_item_price || item.price_numeric || 0);
+            return {
+              price: price,
+              title: item.title || 'Article Vinted',
+              url: item.url || `https://www.vinted.fr/items/${item.id}`,
+              condition: item.status || item.condition,
+              brand: item.brand_title || item.brand?.title,
+              size: item.size_title || item.size,
+              image: item.photo?.url || item.photos?.[0]?.url || item.thumbnail?.url || null
+            };
+          })
+          .filter(item => item.price > 0);
+
+        if (results.prices.length > 0) {
+          const priceValues = results.prices.map(p => p.price);
+          results.minPrice = Math.min(...priceValues);
+          results.maxPrice = Math.max(...priceValues);
+          results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
+          results.count = results.prices.length;
+          results.success = true;
+          console.log('[ResellScout] Vinted succès:', results.count, 'articles');
+        }
+      }
+    }
+
+    if (!results.success && lastError) {
+      results.error = lastError;
+    }
 
   } catch (error) {
     results.error = error.message;
-    console.warn('[ResellScout] Erreur Vinted:', error.message);
+    console.warn('[ResellScout] Erreur Vinted globale:', error.message);
   }
 
   return results;
