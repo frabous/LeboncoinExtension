@@ -1,6 +1,6 @@
 /**
- * ResellScout - Service Worker v4.1
- * 100% Prix Réels - Sources: Vinted et LeBonCoin uniquement
+ * ResellScout - Service Worker v5.0
+ * 100% Prix Réels - Sources: Vinted, LeBonCoin et eBay
  */
 
 // ============================================
@@ -14,7 +14,7 @@ const CONFIG = {
 };
 
 // ============================================
-// RECHERCHE PRIX - VINTED API
+// RECHERCHE PRIX - VINTED (Scraping HTML)
 // ============================================
 
 async function searchVintedPrices(query, options = {}) {
@@ -33,106 +33,234 @@ async function searchVintedPrices(query, options = {}) {
     const cleanQuery = query.replace(/[^\w\s\-àâäéèêëïîôùûüç]/gi, ' ').trim();
     console.log('[ResellScout] Recherche Vinted:', cleanQuery);
 
-    // URLs à essayer dans l'ordre
-    const searchUrls = [
-      `https://www.vinted.fr/api/v2/catalog/items?search_text=${encodeURIComponent(cleanQuery)}&order=relevance&per_page=${CONFIG.MAX_RESULTS}`,
-      `https://www.vinted.fr/api/v2/items?search_text=${encodeURIComponent(cleanQuery)}&per_page=${CONFIG.MAX_RESULTS}`
-    ];
+    // Utiliser la page de recherche HTML de Vinted
+    const searchUrl = `https://www.vinted.fr/catalog?search_text=${encodeURIComponent(cleanQuery)}&order=relevance`;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
 
-    let data = null;
-    let lastError = null;
+    const response = await fetch(searchUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      credentials: 'include',
+      signal: controller.signal
+    });
 
-    // Essayer chaque URL jusqu'à ce qu'une fonctionne
-    for (const searchUrl of searchUrls) {
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`Vinted HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    console.log('[ResellScout] Vinted HTML reçu, longueur:', html.length);
+
+    // Extraire les données JSON intégrées dans la page
+    // Vinted intègre les données dans un script __NEXT_DATA__ ou similaire
+    let items = [];
+
+    // Méthode 1: Chercher les données JSON dans la page
+    const scriptMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+    if (scriptMatch) {
       try {
-        console.log('[ResellScout] Essai URL:', searchUrl.substring(0, 60) + '...');
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
-
-        // Méthode 1: Avec credentials (si cookies disponibles)
-        let response;
-        try {
-          response = await fetch(searchUrl, {
-            method: 'GET',
-            headers: {
-              'Accept': 'application/json, text/plain, */*',
-              'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-              'Cache-Control': 'no-cache',
-              'Pragma': 'no-cache'
-            },
-            credentials: 'include',
-            signal: controller.signal
-          });
-        } catch (fetchError) {
-          console.log('[ResellScout] Fetch avec credentials échoué, essai sans...');
-          // Méthode 2: Sans credentials
-          response = await fetch(searchUrl, {
-            method: 'GET',
-            headers: {
-              'Accept': 'application/json, text/plain, */*',
-              'Accept-Language': 'fr-FR,fr;q=0.9'
-            },
-            signal: controller.signal
-          });
-        }
-
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          data = await response.json();
-          console.log('[ResellScout] Vinted réponse OK:', data);
-          break; // Sortir de la boucle si succès
-        } else {
-          lastError = `HTTP ${response.status}`;
-          console.log('[ResellScout] Vinted erreur HTTP:', response.status);
-        }
+        const jsonData = JSON.parse(scriptMatch[1]);
+        const catalogItems = jsonData?.props?.pageProps?.items || 
+                            jsonData?.props?.pageProps?.catalog?.items ||
+                            jsonData?.props?.pageProps?.initialData?.items || [];
+        items = catalogItems;
+        console.log('[ResellScout] Vinted données JSON trouvées:', items.length);
       } catch (e) {
-        lastError = e.message;
-        console.log('[ResellScout] Erreur Vinted URL:', e.message);
+        console.log('[ResellScout] Erreur parsing JSON Vinted:', e.message);
+      }
+    }
+
+    // Méthode 2: Si pas de JSON, parser le HTML directement
+    if (items.length === 0) {
+      // Regex pour extraire les prix et titres des cartes produit
+      const priceRegex = /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d,]+)\s*€<\/span>/gi;
+      const itemRegex = /data-testid="[^"]*item[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+      
+      // Alternative: chercher les données dans les attributs data-*
+      const dataMatches = html.matchAll(/"price"\s*:\s*"?([\d.]+)"?[^}]*"title"\s*:\s*"([^"]+)"/gi);
+      for (const match of dataMatches) {
+        items.push({
+          price: parseFloat(match[1]),
+          title: match[2]
+        });
+      }
+
+      // Autre pattern: chercher les cartes avec prix
+      const cardMatches = html.matchAll(/([\d]+[,.]?\d*)\s*€[^<]*<[^>]*>[^<]*<a[^>]*href="\/items\/(\d+)[^"]*"[^>]*>([^<]+)/gi);
+      for (const match of cardMatches) {
+        const price = parseFloat(match[1].replace(',', '.'));
+        if (price > 0 && !items.find(i => i.price === price)) {
+          items.push({
+            price: price,
+            title: match[3]?.trim() || 'Article Vinted',
+            id: match[2]
+          });
+        }
       }
     }
 
     // Traitement des résultats
-    if (data) {
-      const items = data.items || data.data || [];
-      
-      if (items.length > 0) {
-        results.prices = items
-          .filter(item => item.price || item.total_item_price || item.price_numeric)
-          .map(item => {
-            const price = parseFloat(item.price || item.total_item_price || item.price_numeric || 0);
-            return {
-              price: price,
-              title: item.title || 'Article Vinted',
-              url: item.url || `https://www.vinted.fr/items/${item.id}`,
-              condition: item.status || item.condition,
-              brand: item.brand_title || item.brand?.title,
-              size: item.size_title || item.size,
-              image: item.photo?.url || item.photos?.[0]?.url || item.thumbnail?.url || null
-            };
-          })
-          .filter(item => item.price > 0);
+    if (items.length > 0) {
+      results.prices = items
+        .slice(0, CONFIG.MAX_RESULTS)
+        .map(item => {
+          const price = typeof item.price === 'string' 
+            ? parseFloat(item.price.replace(',', '.').replace(/[^\d.]/g, '')) 
+            : parseFloat(item.price || item.total_item_price || 0);
+          return {
+            price: price,
+            title: item.title || 'Article Vinted',
+            url: item.url || (item.id ? `https://www.vinted.fr/items/${item.id}` : 'https://www.vinted.fr'),
+            condition: item.status,
+            brand: item.brand_title || item.brand,
+            image: item.photo?.url || item.photos?.[0]?.url || item.thumbnail || null
+          };
+        })
+        .filter(item => item.price > 0);
 
-        if (results.prices.length > 0) {
-          const priceValues = results.prices.map(p => p.price);
-          results.minPrice = Math.min(...priceValues);
-          results.maxPrice = Math.max(...priceValues);
-          results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
-          results.count = results.prices.length;
-          results.success = true;
-          console.log('[ResellScout] Vinted succès:', results.count, 'articles');
-        }
+      if (results.prices.length > 0) {
+        const priceValues = results.prices.map(p => p.price);
+        results.minPrice = Math.min(...priceValues);
+        results.maxPrice = Math.max(...priceValues);
+        results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
+        results.count = results.prices.length;
+        results.success = true;
+        console.log('[ResellScout] Vinted succès:', results.count, 'articles');
       }
     }
 
-    if (!results.success && lastError) {
-      results.error = lastError;
+    if (!results.success) {
+      results.error = 'Aucun résultat trouvé';
     }
 
   } catch (error) {
     results.error = error.message;
-    console.warn('[ResellScout] Erreur Vinted globale:', error.message);
+    console.warn('[ResellScout] Erreur Vinted:', error.message);
+  }
+
+  return results;
+}
+
+// ============================================
+// RECHERCHE PRIX - EBAY
+// ============================================
+
+async function searchEbayPrices(query, options = {}) {
+  const results = {
+    source: 'eBay',
+    prices: [],
+    avgPrice: null,
+    minPrice: null,
+    maxPrice: null,
+    count: 0,
+    success: false,
+    error: null
+  };
+
+  try {
+    const cleanQuery = query.replace(/[^\w\s\-àâäéèêëïîôùûüç]/gi, ' ').trim();
+    console.log('[ResellScout] Recherche eBay:', cleanQuery);
+
+    // Recherche eBay France - articles d'occasion uniquement (LH_ItemCondition=3000)
+    const searchUrl = `https://www.ebay.fr/sch/i.html?_nkw=${encodeURIComponent(cleanQuery)}&_sop=12&LH_ItemCondition=3000&_ipg=60`;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
+
+    const response = await fetch(searchUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`eBay HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    console.log('[ResellScout] eBay HTML reçu, longueur:', html.length);
+
+    // Parser les résultats eBay
+    const items = [];
+
+    // Pattern pour les cartes produit eBay
+    // Format: <span class="s-item__price">XX,XX EUR</span>
+    const pricePattern = /<span\s+class="s-item__price"[^>]*>([\d\s,]+)\s*EUR<\/span>/gi;
+    const titlePattern = /<span\s+role="heading"[^>]*>([^<]+)<\/span>/gi;
+    const linkPattern = /<a\s+class="s-item__link"[^>]*href="([^"]+)"/gi;
+    const imagePattern = /<img\s+class="s-item__image-img"[^>]*src="([^"]+)"/gi;
+
+    // Extraire les blocs d'items
+    const itemBlocks = html.split(/class="s-item\s/gi).slice(1);
+    
+    for (const block of itemBlocks.slice(0, CONFIG.MAX_RESULTS)) {
+      try {
+        // Extraire le prix
+        const priceMatch = block.match(/class="s-item__price"[^>]*>([\d\s,]+)\s*EUR/i);
+        if (!priceMatch) continue;
+        
+        const priceStr = priceMatch[1].replace(/\s/g, '').replace(',', '.');
+        const price = parseFloat(priceStr);
+        if (price <= 0 || isNaN(price)) continue;
+
+        // Extraire le titre
+        const titleMatch = block.match(/role="heading"[^>]*>([^<]+)</i);
+        const title = titleMatch ? titleMatch[1].trim() : 'Article eBay';
+
+        // Extraire le lien
+        const linkMatch = block.match(/class="s-item__link"[^>]*href="([^"]+)"/i);
+        const url = linkMatch ? linkMatch[1].split('?')[0] : 'https://www.ebay.fr';
+
+        // Extraire l'image
+        const imgMatch = block.match(/class="s-item__image-img"[^>]*src="([^"]+)"/i) ||
+                        block.match(/src="(https:\/\/i\.ebayimg\.com[^"]+)"/i);
+        const image = imgMatch ? imgMatch[1] : null;
+
+        // Ignorer les suggestions "Shop on eBay"
+        if (title.toLowerCase().includes('shop on ebay')) continue;
+
+        items.push({ price, title, url, image });
+      } catch (e) {
+        // Ignorer les erreurs de parsing individuelles
+      }
+    }
+
+    // Traitement des résultats
+    if (items.length > 0) {
+      results.prices = items.filter(item => item.price > 0);
+
+      if (results.prices.length > 0) {
+        const priceValues = results.prices.map(p => p.price);
+        results.minPrice = Math.min(...priceValues);
+        results.maxPrice = Math.max(...priceValues);
+        results.avgPrice = Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length);
+        results.count = results.prices.length;
+        results.success = true;
+        console.log('[ResellScout] eBay succès:', results.count, 'articles');
+      }
+    }
+
+    if (!results.success) {
+      results.error = 'Aucun résultat trouvé';
+    }
+
+  } catch (error) {
+    results.error = error.message;
+    console.warn('[ResellScout] Erreur eBay:', error.message);
   }
 
   return results;
@@ -589,14 +717,16 @@ async function fetchAllPrices(productData) {
   console.log(`[ResellScout] Recherche de prix pour: "${searchQuery}"`);
 
   // Lancer les recherches en parallèle - SEULEMENT OCCASION
-  const [vintedResults, leboncoinResults] = await Promise.allSettled([
+  const [vintedResults, leboncoinResults, ebayResults] = await Promise.allSettled([
     searchVintedPrices(searchQuery),
-    searchLeBonCoinPrices(searchQuery)
+    searchLeBonCoinPrices(searchQuery),
+    searchEbayPrices(searchQuery)
   ]);
 
   const occasionSources = [];
   let filteredVinted = [];
   let filteredLeboncoin = [];
+  let filteredEbay = [];
 
   if (vintedResults.status === 'fulfilled' && vintedResults.value.success) {
     filteredVinted = filterRelevantResults(vintedResults.value.prices, searchKeywords);
@@ -621,6 +751,21 @@ async function fetchAllPrices(productData) {
         ...leboncoinResults.value,
         prices: filteredLeboncoin,
         count: filteredLeboncoin.length,
+        minPrice: Math.min(...priceValues),
+        maxPrice: Math.max(...priceValues),
+        avgPrice: Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length)
+      });
+    }
+  }
+
+  if (ebayResults.status === 'fulfilled' && ebayResults.value.success) {
+    filteredEbay = filterRelevantResults(ebayResults.value.prices, searchKeywords);
+    if (filteredEbay.length > 0) {
+      const priceValues = filteredEbay.map(p => p.price);
+      occasionSources.push({
+        ...ebayResults.value,
+        prices: filteredEbay,
+        count: filteredEbay.length,
         minPrice: Math.min(...priceValues),
         maxPrice: Math.max(...priceValues),
         avgPrice: Math.round(priceValues.reduce((a, b) => a + b, 0) / priceValues.length)
@@ -662,6 +807,12 @@ async function fetchAllPrices(productData) {
         prices: filteredLeboncoin,
         originalCount: leboncoinResults.status === 'fulfilled' ? leboncoinResults.value.count : 0,
         filteredCount: filteredLeboncoin.length
+      },
+      ebay: {
+        ...(ebayResults.status === 'fulfilled' ? ebayResults.value : { error: String(ebayResults.reason) }),
+        prices: filteredEbay,
+        originalCount: ebayResults.status === 'fulfilled' ? ebayResults.value.count : 0,
+        filteredCount: filteredEbay.length
       }
     }
   };
