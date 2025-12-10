@@ -1,0 +1,54 @@
+{
+  "extName": {
+    "message": "ResellScout - Analyseur de Rentabilité",
+    "description": "Nom de l'extension"
+  },
+  "extDescription": {
+    "message": "Analysez la rentabilité des articles sur LeBonCoin et Vinted pour optimiser vos achats revente.",
+    "description": "Description de l'extension"
+  },
+  "loading": {
+    "message": "Analyse en cours...",
+    "description": "Message de chargement"
+  },
+  "excellent_deal": {
+    "message": "Excellente Affaire",
+    "description": "Note pour une excellente affaire"
+  },
+  "good_deal": {
+    "message": "Bonne Affaire",
+    "description": "Note pour une bonne affaire"
+  },
+  "fair_deal": {
+    "message": "Prix Correct",
+    "description": "Note pour un prix correct"
+  },
+  "overpriced": {
+    "message": "Surévalué",
+    "description": "Note pour un article surévalué"
+  },
+  "current_price": {
+    "message": "Prix actuel",
+    "description": "Label pour le prix actuel"
+  },
+  "new_price": {
+    "message": "Prix neuf",
+    "description": "Label pour le prix neuf"
+  },
+  "market_price": {
+    "message": "Prix marché occasion",
+    "description": "Label pour le prix du marché occasion"
+  },
+  "potential_profit": {
+    "message": "Profit potentiel",
+    "description": "Label pour le profit potentiel"
+  },
+  "refresh": {
+    "message": "Actualiser",
+    "description": "Bouton d'actualisation"
+  },
+  "error_extraction": {
+    "message": "Impossible d'extraire les données",
+    "description": "Message d'erreur d'extraction"
+  }
+}

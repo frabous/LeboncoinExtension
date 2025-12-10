@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "ResellScout - Analyseur de Rentabilité",
+  "version": "1.0.0",
+  "description": "Analysez la rentabilité des articles sur LeBonCoin et Vinted pour optimiser vos achats revente.",
+  "author": "ResellScout",
+  "default_locale": "fr",
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*.vinted.fr/*",
+    "*://*.leboncoin.fr/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.vinted.fr/items/*"],
+      "js": [
+        "src/content/utils/helpers.js",
+        "src/content/scrapers/vinted-scraper.js",
+        "src/content/ui/overlay.js",
+        "src/content/main.js"
+      ],
+      "css": ["src/content/ui/styles.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.leboncoin.fr/ad/*"],
+      "js": [
+        "src/content/utils/helpers.js",
+        "src/content/scrapers/leboncoin-scraper.js",
+        "src/content/ui/overlay.js",
+        "src/content/main.js"
+      ],
+      "css": ["src/content/ui/styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    },
+    "default_title": "ResellScout"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*", "src/content/ui/*"],
+      "matches": ["*://*.vinted.fr/*", "*://*.leboncoin.fr/*"]
+    }
+  ]
+}

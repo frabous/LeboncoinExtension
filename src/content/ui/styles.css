@@ -1,0 +1,84 @@
+/**
+ * ResellScout - Styles CSS additionnels
+ * Styles pour les éléments injectés dans la page hôte
+ */
+
+/* Ces styles sont pour les éléments en dehors du Shadow DOM */
+
+#resellscout-overlay-container {
+  /* Assurer que le widget est toujours visible */
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  pointer-events: auto !important;
+}
+
+/* Animation d'entrée */
+@keyframes resellscout-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+#resellscout-overlay-container {
+  animation: resellscout-slide-in 0.3s ease-out;
+}
+
+/* Toast notifications */
+.resellscout-toast {
+  position: fixed;
+  bottom: 100px;
+  right: 20px;
+  background: #1e1e2f;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 2147483646;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: resellscout-toast-in 0.3s ease-out;
+}
+
+@keyframes resellscout-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.resellscout-toast.success {
+  background: linear-gradient(135deg, #10b981, #059669);
+}
+
+.resellscout-toast.error {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+}
+
+.resellscout-toast.info {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+/* Highlight sur les éléments scrapés (debug) */
+.resellscout-highlight {
+  outline: 2px dashed #667eea !important;
+  outline-offset: 2px !important;
+}
+
+/* Masquer le widget sur impression */
+@media print {
+  #resellscout-overlay-container {
+    display: none !important;
+  }
+}

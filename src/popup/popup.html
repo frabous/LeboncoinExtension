@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResellScout</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="logo-section">
+        <span class="logo-icon">📊</span>
+        <div class="logo-text">
+          <h1>ResellScout</h1>
+          <span class="version">v1.0.0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Navigation tabs -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="dashboard">
+        <span class="tab-icon">🏠</span>
+        <span>Accueil</span>
+      </button>
+      <button class="tab" data-tab="history">
+        <span class="tab-icon">📋</span>
+        <span>Historique</span>
+      </button>
+      <button class="tab" data-tab="settings">
+        <span class="tab-icon">⚙️</span>
+        <span>Paramètres</span>
+      </button>
+    </nav>
+
+    <!-- Dashboard Tab -->
+    <section class="tab-content active" id="dashboard">
+      <div class="info-card">
+        <h3>🎯 Bienvenue sur ResellScout</h3>
+        <p>Analysez automatiquement la rentabilité des articles sur Vinted et LeBonCoin.</p>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-icon">📦</span>
+          <span class="stat-value" id="total-analyzed">0</span>
+          <span class="stat-label">Articles analysés</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-icon">🔥</span>
+          <span class="stat-value" id="excellent-deals">0</span>
+          <span class="stat-label">Excellentes affaires</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-icon">💰</span>
+          <span class="stat-value" id="total-savings">0 €</span>
+          <span class="stat-label">Économies potentielles</span>
+        </div>
+      </div>
+
+      <div class="quick-links">
+        <h4>Accès rapide</h4>
+        <a href="https://www.vinted.fr" target="_blank" class="quick-link">
+          <span class="link-icon">👗</span>
+          <span>Ouvrir Vinted</span>
+        </a>
+        <a href="https://www.leboncoin.fr" target="_blank" class="quick-link">
+          <span class="link-icon">📦</span>
+          <span>Ouvrir LeBonCoin</span>
+        </a>
+      </div>
+
+      <div class="support-section">
+        <p>🔍 L'extension s'active automatiquement sur les pages produits.</p>
+      </div>
+    </section>
+
+    <!-- History Tab -->
+    <section class="tab-content" id="history">
+      <div class="history-header">
+        <h3>📋 Historique des analyses</h3>
+        <button class="btn-small" id="clear-history">Effacer</button>
+      </div>
+      
+      <div class="history-list" id="history-list">
+        <div class="empty-state">
+          <span class="empty-icon">📭</span>
+          <p>Aucun article analysé pour le moment.</p>
+          <p class="empty-hint">Visitez une page produit sur Vinted ou LeBonCoin.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings Tab -->
+    <section class="tab-content" id="settings">
+      <h3>⚙️ Paramètres</h3>
+
+      <div class="settings-group">
+        <div class="setting-item">
+          <div class="setting-info">
+            <span class="setting-label">Analyse automatique</span>
+            <span class="setting-desc">Analyser les articles dès le chargement</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-auto-analyze" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-info">
+            <span class="setting-label">Afficher l'overlay</span>
+            <span class="setting-desc">Widget flottant sur les pages</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-show-overlay" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-info">
+            <span class="setting-label">Notifications</span>
+            <span class="setting-desc">Alertes pour les bonnes affaires</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-notifications">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-info">
+            <span class="setting-label">Mode sombre</span>
+            <span class="setting-desc">Thème sombre pour le widget</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-dark-mode">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <h4>Position du widget</h4>
+        <div class="position-selector">
+          <button class="position-btn" data-position="top-left">↖</button>
+          <button class="position-btn" data-position="top-right">↗</button>
+          <button class="position-btn" data-position="bottom-left">↙</button>
+          <button class="position-btn active" data-position="bottom-right">↘</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="popup-footer">
+      <span>Made with ❤️ pour les revendeurs</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
