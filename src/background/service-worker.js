@@ -918,71 +918,111 @@ function calculateProfitability(currentPrice, priceData) {
 function transformAnalysisForOverlay(analysis) {
   const { product, prices, profitability } = analysis;
   
-  // Sources avec détails
-  const sources = [];
+  // Collecter toutes les annonces de toutes les sources
+  const allItems = [];
+  const sourcesUsed = [];
   
-  if (prices.rawResults?.vinted) {
-    sources.push({
-      name: 'Vinted',
-      count: prices.rawResults.vinted.filteredCount || 0,
-      avgPrice: prices.rawResults.vinted.avgPrice,
-      minPrice: prices.rawResults.vinted.minPrice,
-      maxPrice: prices.rawResults.vinted.maxPrice,
-      items: prices.rawResults.vinted.prices || [],
-      error: prices.rawResults.vinted.error
+  if (prices.rawResults?.vinted?.filteredCount > 0) {
+    sourcesUsed.push('vinted');
+    prices.rawResults.vinted.prices.forEach(item => {
+      allItems.push({
+        ...item,
+        platform: 'Vinted',
+        source: 'Vinted'
+      });
     });
   }
   
-  if (prices.rawResults?.leboncoin) {
-    sources.push({
-      name: 'LeBonCoin',
-      count: prices.rawResults.leboncoin.filteredCount || 0,
-      avgPrice: prices.rawResults.leboncoin.avgPrice,
-      minPrice: prices.rawResults.leboncoin.minPrice,
-      maxPrice: prices.rawResults.leboncoin.maxPrice,
-      items: prices.rawResults.leboncoin.prices || [],
-      error: prices.rawResults.leboncoin.error
+  if (prices.rawResults?.leboncoin?.filteredCount > 0) {
+    sourcesUsed.push('leboncoin');
+    prices.rawResults.leboncoin.prices.forEach(item => {
+      allItems.push({
+        ...item,
+        platform: 'LeBonCoin',
+        source: 'LeBonCoin'
+      });
     });
   }
   
-  if (prices.rawResults?.ebay) {
-    sources.push({
-      name: 'eBay',
-      count: prices.rawResults.ebay.filteredCount || 0,
-      avgPrice: prices.rawResults.ebay.avgPrice,
-      minPrice: prices.rawResults.ebay.minPrice,
-      maxPrice: prices.rawResults.ebay.maxPrice,
-      items: prices.rawResults.ebay.prices || [],
-      error: prices.rawResults.ebay.error
+  if (prices.rawResults?.ebay?.filteredCount > 0) {
+    sourcesUsed.push('ebay');
+    prices.rawResults.ebay.prices.forEach(item => {
+      allItems.push({
+        ...item,
+        platform: 'eBay',
+        source: 'eBay'
+      });
     });
   }
 
+  // Déterminer l'emoji et le rating
+  let emoji = '📊';
+  let rating = 'neutral';
+  
+  if (profitability.dealScore >= 80) {
+    emoji = '🔥';
+    rating = 'excellent';
+  } else if (profitability.dealScore >= 65) {
+    emoji = '✅';
+    rating = 'good';
+  } else if (profitability.dealScore >= 50) {
+    emoji = '👍';
+    rating = 'fair';
+  } else if (profitability.dealScore >= 35) {
+    emoji = '⚠️';
+    rating = 'high';
+  } else if (profitability.dealScore !== null) {
+    emoji = '❌';
+    rating = 'bad';
+  } else {
+    emoji = '❓';
+    rating = 'unknown';
+  }
+
+  // Calculer la confiance
+  let confidence = 'low';
+  if (prices.occasionPrice.count >= 10) {
+    confidence = 'high';
+  } else if (prices.occasionPrice.count >= 5) {
+    confidence = 'medium';
+  }
+
+  // Format attendu par l'overlay
   return {
-    product: {
-      title: product.title,
-      price: product.price,
-      platform: product.platform,
-      image: product.image,
-      url: product.url
-    },
-    
+    // Données produit
     searchQuery: prices.query,
+    currentPrice: product.price || 0,
     
-    market: {
-      avgPrice: prices.occasionPrice.avg,
-      minPrice: prices.occasionPrice.min,
-      maxPrice: prices.occasionPrice.max,
-      totalListings: prices.occasionPrice.count,
-      sources: sources
+    // Prix du marché
+    averageUsedPrice: prices.occasionPrice.avg,
+    priceRange: {
+      min: prices.occasionPrice.min,
+      max: prices.occasionPrice.max
     },
     
-    analysis: {
-      dealScore: profitability.dealScore,
-      dealRating: profitability.dealRating,
-      recommendation: profitability.recommendation,
-      priceDifference: profitability.vsOccasion.difference,
-      percentDiff: profitability.vsOccasion.percentDiff,
-      verdict: profitability.vsOccasion.verdict
+    // Analyse
+    profit: profitability.vsOccasion.difference || 0,
+    discount: profitability.vsOccasion.percentDiff || 0,
+    
+    // Rating
+    emoji: emoji,
+    rating: rating,
+    ratingLabel: profitability.dealRating || 'ANALYSE',
+    recommendation: profitability.recommendation || '',
+    
+    // Méta
+    dataPoints: prices.occasionPrice.count || 0,
+    sourcesUsed: sourcesUsed,
+    confidence: confidence,
+    
+    // Liste des annonces similaires
+    usedSources: allItems,
+    
+    // Données brutes pour debug
+    raw: {
+      product: product,
+      prices: prices,
+      profitability: profitability
     },
     
     timestamp: prices.timestamp
