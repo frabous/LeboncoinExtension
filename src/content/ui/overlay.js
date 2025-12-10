@@ -12,6 +12,7 @@ const ResellScoutOverlay = {
   currentQuery: '',
   currentAnalysis: null,
   favorites: [],
+  sidebarWidth: 320,
 
   /**
    * Initialise la sidebar
@@ -49,7 +50,64 @@ const ResellScoutOverlay = {
     // Configurer les événements
     this.setupEventListeners();
     
+    // Pousser le contenu de la page vers la gauche
+    this.adjustPageLayout(true);
+    
     console.log('[ResellScout] Sidebar initialisée');
+  },
+
+  /**
+   * Ajuste le layout de la page pour faire de la place à la sidebar
+   */
+  adjustPageLayout(show) {
+    const collapsedWidth = 40;
+    let width = 0;
+    
+    if (show) {
+      width = this.isCollapsed ? collapsedWidth : this.sidebarWidth;
+    }
+    
+    // Ajuster le body
+    document.body.style.marginRight = `${width}px`;
+    document.body.style.transition = 'margin-right 0.3s ease';
+    document.body.style.overflowX = 'hidden';
+    
+    // Ajuster le html
+    document.documentElement.style.marginRight = `${width}px`;
+    document.documentElement.style.transition = 'margin-right 0.3s ease';
+    document.documentElement.style.overflowX = 'hidden';
+    
+    // Ajuster les éléments fixed (header, etc.)
+    const fixedSelectors = [
+      'header',
+      '[class*="header"]',
+      '[class*="Header"]',
+      '[class*="navbar"]',
+      '[class*="Navbar"]',
+      '[class*="top-bar"]',
+      '[class*="topbar"]',
+      '[class*="sticky"]'
+    ];
+    
+    fixedSelectors.forEach(selector => {
+      try {
+        document.querySelectorAll(selector).forEach(el => {
+          const style = window.getComputedStyle(el);
+          if (style.position === 'fixed' || style.position === 'sticky') {
+            el.style.transition = 'right 0.3s ease, width 0.3s ease';
+            if (style.right === '0px' || style.right === 'auto') {
+              el.style.right = `${width}px`;
+            }
+            // Si l'élément a width: 100%, ajuster
+            if (style.width === '100%' || el.style.width === '100%') {
+              el.style.width = `calc(100% - ${width}px)`;
+            }
+          }
+        });
+      } catch (e) {
+        // Ignorer les erreurs de sélecteur
+      }
+    });
   },
 
   /**
@@ -74,14 +132,22 @@ const ResellScoutOverlay = {
         background: #0d0d0d;
         display: flex;
         flex-direction: column;
-        transition: transform 0.3s ease, width 0.3s ease;
+        transition: width 0.3s ease;
         border-left: 1px solid #1a1a1a;
         font-size: 13px;
         color: #e0e0e0;
+        overflow: hidden;
       }
 
       .rs-sidebar.collapsed {
-        transform: translateX(280px);
+        width: 40px;
+      }
+
+      .rs-sidebar.collapsed .rs-header,
+      .rs-sidebar.collapsed .rs-tabs,
+      .rs-sidebar.collapsed .rs-body {
+        opacity: 0;
+        pointer-events: none;
       }
 
       /* Toggle Button */
@@ -108,10 +174,6 @@ const ResellScoutOverlay = {
       .rs-toggle-btn:hover {
         background: #1a1a1a;
         color: #10b981;
-      }
-
-      .rs-sidebar.collapsed .rs-toggle-btn {
-        left: -32px;
       }
 
       /* Header */
@@ -943,6 +1005,8 @@ const ResellScoutOverlay = {
       this.isCollapsed = !this.isCollapsed;
       sidebar.classList.toggle('collapsed', this.isCollapsed);
       toggleBtn.textContent = this.isCollapsed ? '▶' : '◀';
+      // Ajuster le layout de la page
+      this.adjustPageLayout(true);
     });
 
     // Refresh
@@ -1363,6 +1427,9 @@ const ResellScoutOverlay = {
    * Supprime la sidebar
    */
   remove() {
+    // Restaurer le layout de la page
+    this.adjustPageLayout(false);
+    
     const container = document.getElementById(this.containerId);
     if (container) container.remove();
     this.shadowRoot = null;
