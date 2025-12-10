@@ -1136,7 +1136,7 @@ const ResellScoutOverlay = {
     sourcesList.innerHTML = sources.map(source => {
       const title = source.title || 'Article';
       const price = source.price || 0;
-      const image = source.image || source.photo?.url || null;
+      const image = source.image || source.photo || source.thumbnail || null;
       const platform = source.platform || source.source || 'inconnu';
       const score = source.relevanceScore || 0;
       
@@ -1146,7 +1146,7 @@ const ResellScoutOverlay = {
       else if (score >= 40) scoreColor = '#f59e0b';
 
       const imageHTML = image 
-        ? `<img src="${image}" alt="" class="rs-source-image" onerror="this.outerHTML='<div class=\\'rs-source-image placeholder\\'>📦</div>'">`
+        ? `<img src="${image}" alt="" class="rs-source-image" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"><div class="rs-source-image placeholder" style="display:none">📦</div>`
         : `<div class="rs-source-image placeholder">📦</div>`;
 
       return `

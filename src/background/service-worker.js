@@ -77,7 +77,8 @@ async function searchVintedPrices(query, options = {}) {
           condition: item.status,
           brand: item.brand_title,
           size: item.size_title,
-          photo: item.photo?.url
+          photo: item.photo?.url,
+          image: item.photo?.url || item.photos?.[0]?.url || null
         }))
         .filter(item => item.price > 0);
 
@@ -171,7 +172,8 @@ async function searchLeBonCoinPrices(query, options = {}) {
           url: ad.url,
           location: ad.location?.city,
           date: ad.first_publication_date,
-          photo: ad.images?.urls?.[0]
+          photo: ad.images?.urls?.[0],
+          image: ad.images?.urls?.[0] || ad.images?.thumb_url || null
         }))
         .filter(item => item.price > 0);
 
