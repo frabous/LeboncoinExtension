@@ -232,20 +232,37 @@ const ResellScoutMain = {
   },
 
   /**
-   * Envoie un message au background script
+   * Envoie un message au background script avec retry
    * @param {Object} message - Message à envoyer
+   * @param {number} retries - Nombre de tentatives
    * @returns {Promise<Object>} - Réponse
    */
-  sendMessage(message) {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(response);
+  async sendMessage(message, retries = 3) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const response = await new Promise((resolve, reject) => {
+          // D'abord, réveiller le service worker avec un ping
+          chrome.runtime.sendMessage({ action: 'ping' }, () => {
+            // Ignorer les erreurs de ping, envoyer le vrai message
+            chrome.runtime.sendMessage(message, (response) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+              } else {
+                resolve(response);
+              }
+            });
+          });
+        });
+        return response;
+      } catch (error) {
+        console.warn(`[ResellScout] Tentative ${attempt}/${retries} échouée:`, error.message);
+        if (attempt === retries) {
+          throw error;
         }
-      });
-    });
+        // Attendre avant de réessayer
+        await new Promise(r => setTimeout(r, 500 * attempt));
+      }
+    }
   },
 
   /**

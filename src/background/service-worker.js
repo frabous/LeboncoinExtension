@@ -994,6 +994,33 @@ function transformAnalysisForOverlay(analysis) {
 // ============================================
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[ResellScout] Message reçu:', request.action);
+  
+  // Handler principal pour l'analyse d'item (depuis content script)
+  if (request.action === 'analyzeItem') {
+    const productData = {
+      title: request.itemData?.title || request.itemData?.name || '',
+      price: request.itemData?.price || 0,
+      platform: request.itemData?.platform || 'unknown',
+      image: request.itemData?.image || request.itemData?.images?.[0] || null,
+      url: request.itemData?.url || sender.tab?.url || ''
+    };
+    
+    const customQuery = request.itemData?.customQuery || null;
+    
+    handleAnalyzeProduct(productData, customQuery)
+      .then(result => {
+        console.log('[ResellScout] Analyse terminée, envoi réponse');
+        sendResponse({ success: true, analysis: result });
+      })
+      .catch(error => {
+        console.error('[ResellScout] Erreur analyse:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true; // Indique qu'on va répondre de manière asynchrone
+  }
+  
+  // Handler alternatif (pour compatibilité)
   if (request.action === 'analyzeProduct') {
     handleAnalyzeProduct(request.data, request.customQuery)
       .then(result => sendResponse({ success: true, data: result }))
@@ -1010,6 +1037,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
+  
+  // Handler pour ping (vérifier que le service worker est actif)
+  if (request.action === 'ping') {
+    sendResponse({ success: true, message: 'pong' });
+    return false;
+  }
+  
+  return false;
 });
 
 async function handleAnalyzeProduct(productData, customQuery = null) {
